@@ -338,58 +338,6 @@ toScaleDegreeRepr p@(pc, oct) tonic mode =
                       accs         = getAccidentals pc_match pc
                   in  ScalePitch soct (toEnum sdeg) accs tonic mode
 
-
-{-
--- toScaleDegreeRepr :: Pitch           -- a pitch in Euterpea representation
---                   -> PitchClassEquiv -- a key (tonic) to base the mode on
---                   -> ScaleMode       -- a scale mode based on some key (tonic)
---                   -> ScalePitch      -- the pitch, in scale-degree representation
--- toScaleDegreeRepr p@(pc, oct) tonic mode = 
---   case safeScaleDegreeNames tonic mode of 
---     Nothing          -> error $ "pitch classes unavailable for \
---                                 \spelling the scale degrees of: "
---                                 ++ show (getPc tonic) ++ " " ++ show mode
---     Just pces        -> 
---       -- convert pitch to enharmonic-equivalence representation
---       let equived@(pce', oct') = pitchEquivalize p 
-
---           -- predicate to locate pitch-class whose 
---           -- base char matches that of the input pitch
---           pred :: PitchClassEquiv -> Bool 
---           pred = \x -> (head $ show $ getPc x) == (head $ show $ getPc pce')
-
---           -- search for a base-char match among the 
---           -- pitch-class that spell out the given mode in the given key
---           baseCharMatch :: Maybe (PitchClassEquiv, Int)
---           baseCharMatch = 
---             liftA2 (,) (find pred pces) (L.findIndex pred pces)
-
---           -- use the base-char match to find out how many 
---           -- semitones the input pitch differs by; fail if no match
---           findResult@(a, j)   = case baseCharMatch of 
---             Just (match, index)   -> (getAccidentals (getPc match) (getPc pce'), index)
---             _                     -> error $ "no base char match available for "
---                                              ++ show (getPc tonic) ++ " in " 
---                                              ++ show (getPc <$> pces)
-
---           -- The octave must be adjusted from the 2nd part of the tuple 'equived',
---           -- in order to re-set the abs-pitch origin to the 0th occurrence of the 
---           -- PitchClassEquiv given by pce'. 
---           -- To do this:  a) find absPitch p; 
---           --              b) subtract (fromIntegral $ NT.getVal $ toChromaticCircle tonic :: Int)
---           --              c) get the div of this when divided by 12.
---           oct_pce = 
---                 let ap  = absPitch p 
---                     ap' = ap - (fromIntegral $ getVal $ toChromaticCircle tonic)
---                 in  (ap' `div` 12) - 1 
-             
---       in  ScalePitch  (oct_pce :: ScaleOctave)
---                       (toEnum j :: ScaleDegree) 
---                       (a :: Int)
---                       (tonic :: PitchClassEquiv) 
---                       (mode :: ScaleMode)   
--}
-
 addAccidentals :: PitchClass -> Int -> PitchClass 
 addAccidentals pc acc = 
   let base_pc = read $ L.take 1 $ show pc :: PitchClass 
@@ -404,21 +352,6 @@ addAccidentals pc acc =
     _               -> error $ "No pitch class available for spelling: "
                                ++ show pc ++ " with adjustment by: " ++ show acc 
                                ++ " semitones"
-
--- -- Adjust the below.
--- fromScaleDegreeRepr :: ScalePitch -- a pitch reported in terms of 
---                                   -- scale degree & number of accidentals,
---                                   -- with respect to a given tonic key / mode
---                     -> Pitch 
--- fromScaleDegreeRepr (ScalePitch oct degree accs tonic mode) = 
---   pitchEuterpize (MkPCE degree_pc, oct')
---     where   degree_pc_0 = getPc $ getScaleDegreeNames tonic mode !! fromEnum degree 
---             degree_pc   = addAccidentals degree_pc_0 accs 
---             oct'        = let ap  = (oct + 1) * 12 + ((stepsToOffsets $ getScaleStepSizes mode) !! (fromEnum degree))
---                                                    + accs 
---                               ap' = ap + (fromIntegral $ getVal $ toChromaticCircle (MkPCE degree_pc))
---                           in  (ap' `div` 12) - 1 
-
 
 -- In general, casting back from a scale-degree represented musical pitch
 -- into Euterpea representation may be impossible!

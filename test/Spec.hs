@@ -104,50 +104,6 @@ spellModeOnPitch p@(pc, oct) mode =
         spelled_oct_ord = L.sortOn absPitch spelled_octave
   in    spelled_oct_ord
 
--- Two tests, both confirming that the scale, in scale degree representation,
--- built starting on any given pitch with a pitch class containing up to one sharp or flat
--- and spanning one octave's worth of diatonic pitches in the given mode 
--- *is the same as*
--- the scale built directly on scale degrees, and using the octave of that pitch's
--- "absolute representation" as the scale octave.
-chkToScaleDegreeRepr  :: ScaleMode 
-                      -> ScaleOctave
-                      -> Property 
-chkToScaleDegreeRepr sm soct = 
-  forAll genTypicalKeySig
-    (\x -> 
-      -- get the pitch class spellings for the scale mode & key sig
-      let base_pitch      = pitchEuterpize (x, soct)
-          octave_aps      = ((+) (absPitch base_pitch)) <$> (stepsToOffsets $ getScaleStepSizes sm)
-
-          -- Take the (PitchClass, Octave) pairings for the current and following octave
-          true_spellings  = getPc <$> getScaleDegreeNames x sm
-          truespell_ps    :: [Pitch]
-          truespell_ps    = 
-                  let oct = fromIntegral soct 
-                  in  [ (p, o) | p <- true_spellings, o <- [ oct - 1 .. oct + 1 ] ]
-
-          spelled_octave  = L.filter (\p -> absPitch p `elem` octave_aps) truespell_ps
-          spelled_oct_ord = L.sortOn absPitch spelled_octave
-
-          -- the 7 Euterpea pitches making up the diatonic scale 
-          -- specified by (sm :: ScaleMode) and starting on (soct :: ScaleOctave)
-      in  ((\p -> toScaleDegreeRepr p x sm) <$> spelled_oct_ord) ==
-            -- the 7 scale degrees for the mode, starting from the given tonic / 
-            -- in the given octave & with no accidentals
-            ((\sd -> ScalePitch soct sd 0 x sm) <$> [S1 .. S7]))
-    
-chkToScaleDegreeRepr' :: ScaleMode 
-                      -> Octave 
-                      -> Property 
-chkToScaleDegreeRepr' mode oct = 
-  forAll genTypicalKeySig
-    (\x -> let  euterpea_pitch  = (getPc x, oct)
-                spelled_oct     = spellModeOnPitch euterpea_pitch mode
-                absolute_oct    = snd (pitchEquivalize euterpea_pitch)
-                degrees_oct     = (\sd -> ScalePitch absolute_oct sd 0 x mode) <$> [S1 .. S7]
-            in  ((\p -> toScaleDegreeRepr p x mode) <$> spelled_oct) == degrees_oct)
-
 main :: IO ()
 main = do
   quickCheck chkIdentity
