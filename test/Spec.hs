@@ -5,7 +5,7 @@ import Euterpea
 import qualified Data.List as L 
 import qualified Data.Map as M 
 import qualified Data.Maybe as MB 
-import qualified Math.NumberTheory.Moduli.Class as NT 
+import Control.Applicative
 import Test.QuickCheck
 
 instance Arbitrary ScaleMode where 
@@ -35,6 +35,11 @@ typicalKeySigs = [C,  D,  E,  F,  G,  A,
 genTypicalKeySig :: Gen PitchClassEquiv
 genTypicalKeySig = MkPCE <$> 
   elements typicalKeySigs
+
+genPitch :: Gen Pitch 
+genPitch = 
+  (pure (,)) <*> arbitrary
+             <*> (elements [0..10])
 
 chkIdentity :: (PitchClassEquiv, OctaveEquiv) -> Bool 
 chkIdentity q = 
@@ -71,14 +76,25 @@ chkEquivReprAbsPitch  :: Pitch
                       -> Bool 
 chkEquivReprAbsPitch p = 
   let p'@(pce, octe) = pitchEquivalize p 
-  in  (fromIntegral $ NT.getVal $ toChromaticCircle pce :: Int) + 
+  in  toChromaticCircle pce + 
       (12 * (octe + 1)) == absPitch p
+
+-- Double checking the same property as 'chkEquivReprAbsPitch', 
+-- but with respect to the convenience function absPitchEq
+chkEquivReprAbsPitch2 :: Pitch 
+                      -> Bool 
+chkEquivReprAbsPitch2 p = 
+  let p'  = pitchEquivalize p 
+      ap  = absPitch p 
+      ap' = absPitchEq p'
+  in  ap == ap'
 
 -- Checks that for either of the 2 scale modes currently supported, and  
 -- for any of the pitch class spellings typically used to provide the tonic
 -- of a key signature, the result of the safe function 'safeScaleDegreeNames'
 -- is not Nothing, and contains a list of 7 pitch classes (i.e. the spellings for
 -- diatonic pitch classes belonging to the scale.)
+
 chkScaleDegreeNames :: ScaleMode 
                     -> Property 
 chkScaleDegreeNames sm =
@@ -88,21 +104,46 @@ chkScaleDegreeNames sm =
       in  (names /= Nothing) &&
           ((length <$> names) == Just 7))
 
--- For a given Euterpea pitch & scale mode, obtain the list of seven diatonic pitches which 
--- spell out the scale starting at that pitch & in that mode.
-spellModeOnPitch :: Pitch -> ScaleMode -> [Pitch]
-spellModeOnPitch p@(pc, oct) mode = 
-        -- get the seven diatonic pitch class spellings
-  let   diatonic_pcs    = getPc <$> getScaleDegreeNames (MkPCE pc) mode
-        -- get absolute pitches making up the scale
-        abs_p           = absPitch p
-        octave_aps      = (abs_p +) <$> (stepsToOffsets $ getScaleStepSizes mode)
-        -- get all diatonic pitches up to one octave away from (p :: Pitch)
-        octs_pitches    = [ (p, o) | p <- diatonic_pcs, o <- [ oct - 1 .. oct + 1 ] ]
-        -- get a sublist of just the diatonic pitches whose absolute pitch is in octave_aps
-        spelled_octave  = L.filter (\p -> absPitch p `elem` octave_aps) octs_pitches
-        spelled_oct_ord = L.sortOn absPitch spelled_octave
-  in    spelled_oct_ord
+-- Checks that for any choice of typical tonic pitch class spelling (pce) and choice of
+-- mode (sm), the function (\p -> toScaleDegreeRepr p pce sm) takes the lowest lying
+-- instance of the tonic pitch class with non-negative abs pitch i.e. the pitch due to 
+-- 'pitchEuterpize (pce, (-1))' to 'ScalePitch (-1) S1 0 pce sm', i.e. it should be 
+-- reported as the 1st scale degree of octave #(-1) with 0 accidentals, for the tonic
+-- and scale mode in question.
+
+chkScaleDegreeReprLowestTonic :: ScaleMode 
+                              -> Property 
+chkScaleDegreeReprLowestTonic sm = 
+  forAll genTypicalKeySig
+    (\x -> 
+      let lowest_tonic = pitchEuterpize (x, (-1))
+      in  (ScalePitch (-1) S1 0 x sm) == 
+            toScaleDegreeRepr lowest_tonic x sm)
+
+-- 
+chkMkStreamThreeOctaves :: ScaleMode 
+                        -> Property 
+chkMkStreamThreeOctaves sm = 
+  forAll genTypicalKeySig
+    (\tonic -> 
+      let tonicStream     = mkTonicScaleModeStream tonic sm 
+          tonicSubstream  = take 21 tonicStream
+          tonicInt        = toChromaticCircle tonic
+          stepSizes       = getScaleStepSizes sm 
+          offsets         = (scanl (+) 0 $ stepSizes) ++ 
+                            (scanl (+) 12 $ stepSizes) ++
+                            (scanl (+) 24 $ stepSizes)
+          aps             = absPitchEq <$> tonicSubstream
+          aps'            = (tonicInt +) <$> offsets 
+      in  aps == aps')
+
+chkScaleDegreeRepr  :: ScaleMode 
+                    -> Property 
+chkScaleDegreeRepr sm =
+  forAll (liftA2 (,) genPitch genTypicalKeySig)
+    (\(p, tonic) ->
+      let sp = toScaleDegreeRepr p tonic sm 
+      in  toAbsPitchRepr sp == absPitch p)
 
 main :: IO ()
 main = do
@@ -111,4 +152,9 @@ main = do
   quickCheck chkEnharmonicEquivalence
   quickCheck chkScaleDegreeNames
   quickCheck chkEquivReprAbsPitch
+  quickCheck chkEquivReprAbsPitch2
+  quickCheck chkScaleDegreeReprLowestTonic
+  quickCheck chkMkStreamThreeOctaves
+  quickCheck chkScaleDegreeRepr
+
 

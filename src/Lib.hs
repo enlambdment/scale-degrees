@@ -1,5 +1,4 @@
 {-# LANGUAGE TupleSections              #-}
-{-# LANGUAGE DataKinds                  #-}
 
 module Lib where
 
@@ -8,13 +7,6 @@ import Control.Applicative
 import Control.Monad
 import Data.List as L
 import Data.Map as M 
-
--- I don't need type-level modulo-12 integers to implement
--- this, when the `div` / `mod` functions are available & work fine.
--- ...... but at the same time, it's nice to have the type-level
--- guarantee that all pitch class equiv's will be mapped into 
--- nothing but the 12 equivalence classes over Int.
-import Math.NumberTheory.Moduli.Class 
 
 -- Type alias representing a difference between two
 -- consecutive abs pitches in a scale.
@@ -77,28 +69,26 @@ newtype PitchClassEquiv = MkPCE {
   getPc :: PitchClass
   } deriving (Show, Eq, Ord)
 
-type Z12 = Mod 12
 
 -- The chromatic circle is obtained by classifying all PitchClasses
--- by enharmonic equivalence relation, into 'Mod 12' the integers
--- modulo 12. 
-toChromaticCircle :: PitchClassEquiv -> Z12 
+-- by enharmonic equivalence relation, into integers mod 12
+toChromaticCircle :: PitchClassEquiv -> Int 
 toChromaticCircle (MkPCE pc) = 
-  fromIntegral $ absPitch (pc, -1) :: Mod 12
+  (absPitch (pc, -1)) `mod` 12
 
 -- Mapping from each pitch class to its position in the chromatic scale.
 -- This will be useful later for generating the series of pitch classes 
 -- that a scale founded on some tonic pitch class comprises.
-chromaticCircleMap :: M.Map PitchClassEquiv Z12 
+chromaticCircleMap :: M.Map PitchClassEquiv Int 
 chromaticCircleMap = M.fromList $ 
   zip allPcs (toChromaticCircle <$> allPcs)
   where allPcs = MkPCE <$> (enumFromTo minBound maxBound :: [PitchClass])
 
 -- chromaticCircleMap is not injective, so this gives back
 -- lists of PitchClasses per an int. modulo 12
-fromZ12ToPitchClasses :: Z12 -> [PitchClassEquiv]
+fromZ12ToPitchClasses :: Int -> [PitchClassEquiv]
 fromZ12ToPitchClasses z = 
-  let submap = M.filter (z ==) chromaticCircleMap
+  let submap = M.filter ((z `mod` 12) ==) chromaticCircleMap
   in  keys submap
 
 -- API functions for working with the chromatic circle.
@@ -108,8 +98,7 @@ fromZ12ToPitchClasses z =
 -- All possible spellings of the resulting pitch class are returned.
 chromPlus :: PitchClassEquiv -> Int -> [PitchClassEquiv]
 chromPlus pce n = 
-  let n' = fromIntegral n :: Z12
-  in  fromZ12ToPitchClasses . (n' +) . toChromaticCircle $ pce
+  fromZ12ToPitchClasses . (n +) . toChromaticCircle $ pce
 
 
 -- Given a pitch class equiv, a number of semitones to advance
@@ -231,13 +220,74 @@ pitchEuterpize (MkPCE pc, oct')
   | pc `elem` [Bs, Bss]     = (pc, oct' - 1)
   | otherwise               = (pc, oct')
 
+-- For convenience, to get the number of semitones separating
+-- a (PitchClassEquiv, OctaveEquiv) (equivalized pitch) from 
+-- (C, -1), which lies at abs pitch of zero.
+absPitchEq :: (PitchClassEquiv, OctaveEquiv) -> AbsPitch 
+absPitchEq (pce, octe) = 
+  let pitch_class_offset  = toChromaticCircle pce
+      octave_offset       = 12 * (octe + 1)
+  in  pitch_class_offset + octave_offset
+
+-- Given a tonic pitch-class spelling and scale mode, produces 
+-- the infinite list ('stream') of (PitchClassEquiv, OctaveEquiv) 
+-- pairs, in order, spelling out the scale in this tonic key, and
+-- starting from the lowest tonic instance with non-negative 
+-- absolute pitch.
+mkTonicScaleModeStream :: PitchClassEquiv 
+                       -> ScaleMode 
+                       -> [(PitchClassEquiv, OctaveEquiv)]
+mkTonicScaleModeStream tonic mode = 
+  let pairs         = [(pce, octe) | octe <- [(-1)..],
+                                     pce <- L.sortOn toChromaticCircle 
+                                                     (getScaleDegreeNames tonic mode)]
+      lowest_tonic  = (tonic, (-1))
+  in  L.dropWhile (\x -> absPitchEq x < absPitchEq lowest_tonic)
+                  pairs 
+
+-- Given an equivalence-class representation :: (PitchClassEquiv, OctaveEquiv),
+-- and a list :: [(PitchClassEquiv, OctaveEquiv)],
+-- return the index and value of the list element whose 
+--  a) base char matches that of the input pitch
+--  b) octave part matches that of the input pitch
+getPCEBaseChar :: PitchClassEquiv -> Char 
+getPCEBaseChar pce = head $ show $ getPc pce 
+
+-- PROBLEM: Right now, this searches a potentially infinite list
+-- and can therefore be potentially non-terminating.
+-- This is what comes up when I attempt to run certain property
+-- tests on toScaleDegreeRepr2, which uses this function.
+getClosestIndexPitchEquiv :: (PitchClassEquiv, OctaveEquiv) 
+                          -> [(PitchClassEquiv, OctaveEquiv)]
+                          -> Maybe (Int, (PitchClassEquiv, OctaveEquiv))
+getClosestIndexPitchEquiv (pce, octe) pairs = 
+  let pred = (\x -> (getPCEBaseChar (fst x) == getPCEBaseChar pce) &&
+                    (               (snd x) ==                octe))
+  in  (pure (,)) <*> (L.findIndex pred $ pairs)
+                 <*> (find pred $ pairs) 
+
 data ScalePitch = ScalePitch {
   scaleOctave :: ScaleOctave,
   scaleDegree :: ScaleDegree, 
   accidentals :: Int, 
   scaleTonic  :: PitchClassEquiv,
   scaleMode   :: ScaleMode
-  } deriving (Eq, Show) 
+  } 
+    -- deriving (Eq, Show) 
+    deriving Eq 
+
+instance Show ScalePitch where 
+  show (ScalePitch soct sdeg accs tonic mode) = 
+    (case soct of 
+      1     -> show soct ++ "st"
+      2     -> show soct ++ "nd"
+      3     -> show soct ++ "rd"
+      _     -> show soct ++ "th") ++ " octave " ++ show sdeg ++ 
+    (case signum accs of 
+      (-1)  -> L.take (abs accs) $ repeat '-'
+      0     -> ""
+      1     -> L.take accs $ repeat '+')
+        ++ " (" ++ show (getPc tonic) ++ " " ++ show mode ++ ")"
 
 -- Based upon their spellings, figure out how many semitones
 -- two PitchClasses with identical base chars differ by.
@@ -259,84 +309,80 @@ getAccidentals pc pc' =
         _                ->  error "invalid pitch classes"
 
 
+diatonic_match :: PitchClassEquiv
+               -> ScaleMode 
+               -> (PitchClassEquiv, OctaveEquiv)
+               -> [PitchClassEquiv]
+diatonic_match tonic mode peqv = 
+  L.filter (\n -> (getPCEBaseChar n) == (getPCEBaseChar $ fst peqv)) 
+           (getScaleDegreeNames tonic mode)
 
--- GOAL of the below:
--- When using a fixed tonic PitchClassEquiv and ScaleMode (e.g. MkPCE F, MajorMode),
--- a series of pitches starting from the PitchClassEquiv in one octave but "spilling over"
--- into the next octave should be output as falling under one and the same ScaleOctave:
+neighbors :: PitchClassEquiv
+          -> ScaleMode 
+          -> (PitchClassEquiv, OctaveEquiv) 
+          -> [(PitchClassEquiv, OctaveEquiv)]
+neighbors tonic mode peqv = 
+  [ (d, oct) | d <- diatonic_match tonic mode peqv, 
+               oct <- [(snd peqv - 1)..(snd peqv + 1)] ]
 
--- (\p -> toScaleDegreeRepr p (MkPCE F) MajorMode) <$> 
---  [(F, 4), (G, 4), (A, 4), (Bf, 4), (C, 5), (D, 5), (E, 5)]
--- should give
---  [ScalePitch 4 S1 0 (MkPCE F) MajorMode, ..., ScalePitch 4 S7 0 (MkPCE F) MajorMode]
+get_nearest_neighbor :: PitchClassEquiv
+                     -> ScaleMode
+                     -> (PitchClassEquiv, OctaveEquiv)
+                     -> (PitchClassEquiv, OctaveEquiv)
+get_nearest_neighbor tonic mode peqv = head $ 
+  L.sortOn (\x -> abs $ (absPitchEq x) - (absPitchEq peqv)) 
+           (neighbors tonic mode peqv)
 
--- The octave part has to be adjusted, depending on whether or not
-          -- a new keyboard octave has begun by the time the pitch class in 
-          -- question for our scale degree is reached.
-          -- To find this out, use pces & split into two lists, the sublist
-          -- before base char of 'C' is reached & the sublist after.
-          -- If the input pitch class 'pc' has base char belonging to the
+peqv_sublist, peqv_sorted :: PitchClassEquiv 
+                          -> ScaleMode 
+                          -> (PitchClassEquiv, OctaveEquiv) 
+                          -> [(PitchClassEquiv, OctaveEquiv)]
+peqv_sublist tonic mode peqv@(p, o) 
+ | o >= 0     = [(pce, octe) | octe <- [(-1)..(o + 1)], 
+                               pce <- getScaleDegreeNames tonic mode]
+ | otherwise  = [(pce, octe) | octe <- [(o - 1)..0], 
+                               pce <- getScaleDegreeNames tonic mode]
 
-octaveAdjust :: PitchClassEquiv -> [PitchClassEquiv] -> Int 
-octaveAdjust pce pces = 
-  let strs pces       = (show . getPc) <$> pces
-      wrapAround pces = case (head $ head $ strs pces) of
-            'C'             -> []
-            _               -> dropWhile (('C' /=) . head . show . getPc) pces
-  in  if pce `elem` wrapAround pces 
-        then (-1)
-        else 0
+peqv_sorted tonic mode peqv = 
+  L.sortOn absPitchEq $ peqv_sublist tonic mode peqv
 
--- INVARIANT: For any pitch p,
---  pceToInt $ pitchEquivalize p == absPitch p
-pceToInt :: (PitchClassEquiv, OctaveEquiv) -> Int 
-pceToInt (pce, octe) =
-  (fromIntegral $ getVal $ toChromaticCircle pce :: Int) + 
-    (12 * (octe + 1))
+find_origin_vs_match :: Pitch 
+                     -> PitchClassEquiv 
+                     -> ScaleMode 
+                     -> (Maybe Int, Maybe Int)
+find_origin_vs_match p tonic mode = 
+ let peqv      = pitchEquivalize p 
+     match     = diatonic_match tonic mode peqv
+     neighbor  = get_nearest_neighbor tonic mode peqv
+     subscale  = peqv_sorted tonic mode peqv
+     idx_o     = L.findIndex (== (tonic, -1)) subscale
+     idx_nghbr = L.findIndex (== neighbor) subscale 
+ in  (idx_o, idx_nghbr)
 
--- Re-attempting toScaleDegreeRepr, from scratch.
-toScaleDegreeRepr :: Pitch           -- a pitch in Euterpea representation
-                  -> PitchClassEquiv -- a key (tonic) to base the mode on
-                  -> ScaleMode       -- a scale mode based on some key (tonic)
-                  -> ScalePitch      -- the pitch, in scale-degree representation
-toScaleDegreeRepr p@(pc, oct) tonic mode =
-  let   
-        diatonic_spellings  :: [PitchClassEquiv]
-        diatonic_spellings  = getScaleDegreeNames tonic mode
 
-        scalar_origin       :: (PitchClass, Octave)
-        scalar_origin       = (getPc tonic, 0)
-
-        subline             :: [(PitchClass, Octave)]
-        subline             = L.sortOn absPitch [ (getPc pc', oct') | pc' <- diatonic_spellings,
-                                                                      oct' <- [(negate $ abs oct + 1) .. (abs oct + 1)] ]
-
-        -- now look up 'scalar_origin' and 'equived' in subline.
-        -- Look for exact match on 'scalar_origin', but look for base-char-only match on spelling parts of 'equived'
-        equived_pred        :: (PitchClass, Octave) -> Bool 
-        equived_pred        = (\(pc', oct') -> 
-                                  (head $ show $ pc') == (head $ show $ pc) && 
-                                  (oct' == oct))
-
-        origin_index, 
-          equived_index     :: Maybe Int
-        origin_index        = L.findIndex (scalar_origin ==) subline 
-        equived_index       = L.findIndex equived_pred subline 
-
-        equived_find        :: Maybe (PitchClass, Octave) 
-        equived_find        = L.find equived_pred subline
-
-        equived_offset      :: Maybe Int 
-        equived_offset      = liftA2 (-) equived_index origin_index
-  in    
-        case (equived_offset, equived_find) of 
-            (Nothing, _)                        -> error "ERROR"
-            (_, Nothing)                        -> error "ERROR"
-            (Just d, Just (pc_match, _))     -> 
-              -- d `divMod` 7 will provide scale-octave # as quotient, scale-degree # as remainder)
-                  let (soct, sdeg) = d `divMod` 7 
-                      accs         = getAccidentals pc_match pc
-                  in  ScalePitch soct (toEnum sdeg) accs tonic mode
+toScaleDegreeRepr :: Pitch 
+                  -> PitchClassEquiv 
+                  -> ScaleMode 
+                  -> ScalePitch 
+toScaleDegreeRepr p tonic mode = 
+  case (find_origin_vs_match p tonic mode) of 
+    (Nothing, _)          -> error "ERROR"
+    (_, Nothing)          -> error "ERROR"
+    (Just i_o, Just i_n)  -> 
+              -- compute scale octave part 
+              let di            = i_n - i_o
+                  index_div     = di `div` 7 
+                  octave_part   = index_div - 1 
+              -- compute scale degree part 
+                  index_mod     = di `mod` 7 
+                  degree_part   = toEnum index_mod :: ScaleDegree
+              -- compute accidentals (int) part
+                  pc            = fst p
+                  match         = head $ diatonic_match tonic mode (pitchEquivalize p) 
+                  match_pc      = getPc match 
+                  accids_part   = getAccidentals match_pc pc 
+              -- insert tonic & mode 
+              in  ScalePitch octave_part degree_part accids_part tonic mode
 
 addAccidentals :: PitchClass -> Int -> PitchClass 
 addAccidentals pc acc = 
@@ -373,4 +419,10 @@ toAbsPitchRepr (ScalePitch oct degree accs tonic mode) =
   -- accidentals part of the absolute pitch sum
   accs + 
   -- tonic key part of the absolute pitch sum
-  (fromIntegral $ getVal $ toChromaticCircle tonic)
+  (toChromaticCircle tonic)
+
+-- A convenience function for casting ScalePitch'es back into a playable
+-- form without concern for the resulting pitch-class spelling.
+pitchify :: ScalePitch -> Pitch 
+pitchify = pitch . toAbsPitchRepr
+

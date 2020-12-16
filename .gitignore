@@ -1,0 +1,6 @@
+.stack-work/
+app/
+ChangeLog.md
+package.yaml
+stack.yaml.lock
+*~
